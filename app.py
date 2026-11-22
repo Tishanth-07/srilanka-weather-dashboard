@@ -1,3 +1,4 @@
+import datetime
 from pathlib import Path
 import joblib
 import numpy as np
@@ -248,8 +249,43 @@ def load_artifacts():
     return model_results, feature_importance, colombo_forecast
 
 
+@st.cache_data(show_spinner="Loading historical Sri Lankan weather dataset...")
+def load_historical_weather_lookup():
+    df = pd.read_csv(DATA_DIR / "sri_lanka_weather.csv")
+    df["time_dt"] = pd.to_datetime(df["time"])
+    df = df.sort_values(["city", "time_dt"]).reset_index(drop=True)
+    num_cols = [
+        "temperature_2m_max",
+        "temperature_2m_min",
+        "temperature_2m_mean",
+        "precipitation_sum",
+        "wind_speed_10m_max",
+        "sunshine_duration",
+    ]
+    df[num_cols] = df.groupby("city")[num_cols].transform(lambda s: s.ffill().bfill())
+    df["sunshine_hours"] = df["sunshine_duration"] / 3600.0
+    df["actual_next_temp"] = df.groupby("city")["temperature_2m_mean"].shift(-1)
+    df["date_str"] = df["time_dt"].dt.strftime("%Y-%m-%d")
+
+    lookup = {}
+    for row in df.to_dict(orient="records"):
+        lookup[(row["city"], row["date_str"])] = row
+    return lookup
+
+
+def get_monsoon_season(month: int) -> str:
+    if month in (12, 1, 2):
+        return "Northeast Monsoon (Maha — Dec to Feb)"
+    if month in (3, 4):
+        return "First Inter-Monsoon (Mar to Apr)"
+    if month in (5, 6, 7, 8, 9):
+        return "Southwest Monsoon (Yala — May to Sep)"
+    return "Second Inter-Monsoon (Oct to Nov)"
+
+
 ensemble_models, arma_models, hybrid_rf_residual, feature_cols, recent_city_temps = load_models()
 model_results_df, feature_imp_df, colombo_forecast_df = load_artifacts()
+weather_lookup = load_historical_weather_lookup()
 
 ALL_MODEL_NAMES = ["Hybrid: ARMA + Random Forest"] + list(ensemble_models.keys())
 
@@ -357,61 +393,109 @@ selected_model = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 📅 Temporal Inputs")
+st.sidebar.markdown("### 🗓️ Temporal Inputs")
 
-selected_month = st.sidebar.selectbox(
-    "Month & Monsoon Season",
-    options=list(MONTH_NAMES.keys()),
-    format_func=lambda m: f"{m:02d} - {MONTH_NAMES[m]}",
-    index=6,
+raw_date = st.sidebar.date_input(
+    "Observation Date (Today)",
+    value=datetime.date(2026, 11, 22),
+    min_value=datetime.date(2020, 1, 1),
+    max_value=datetime.date(2030, 12, 31),
+    help="Select any exact calendar date (2020-01-01 to 2030-12-31) to compute exact month and day_of_year.",
 )
-default_doy = min(365, max(1, (selected_month - 1) * 30 + 15))
+selected_date = raw_date[0] if isinstance(raw_date, (tuple, list)) else raw_date
+selected_date_str = selected_date.strftime("%Y-%m-%d")
+target_date = selected_date + datetime.timedelta(days=1)
+target_date_str = target_date.strftime("%Y-%m-%d")
+
+selected_month = int(selected_date.month)
+exact_doy = int(selected_date.timetuple().tm_yday)
+monsoon_season = get_monsoon_season(selected_month)
+
+st.sidebar.caption(
+    f"🌧️ **Monsoon Season:** {monsoon_season}  \n"
+    f"📆 **Month:** `{selected_month}` | **Day of Year:** `{exact_doy}`  \n"
+    f"🎯 **Forecast Target Date:** `{target_date_str}`"
+)
+
+# Historical record lookup for (selected_city, selected_date_str)
+hist_record = weather_lookup.get((selected_city, selected_date_str))
+
+# Initialize or reset slider session state when city changes
+if st.session_state.get("active_city") != selected_city:
+    st.session_state["active_city"] = selected_city
+    st.session_state["obs_temp_max"] = float(defaults["max"])
+    st.session_state["obs_temp_min"] = float(defaults["min"])
+    st.session_state["obs_temp_mean"] = float(defaults["mean"])
+    st.session_state["obs_precip"] = float(defaults["rain"])
+    st.session_state["obs_wind"] = float(defaults["wind"])
+    st.session_state["obs_sun"] = float(defaults["sun"])
+
+load_actual_clicked = st.sidebar.button(
+    "Load Actual Weather for Selected Date",
+    use_container_width=True,
+    help="Auto-populate sliders with real historical weather observations from data/sri_lanka_weather.csv (available for 2020-01-01 to 2026-10-31).",
+)
+
+if load_actual_clicked:
+    if hist_record is not None:
+        st.session_state["obs_temp_max"] = round(float(hist_record["temperature_2m_max"]), 1)
+        st.session_state["obs_temp_min"] = round(float(hist_record["temperature_2m_min"]), 1)
+        st.session_state["obs_temp_mean"] = round(float(hist_record["temperature_2m_mean"]), 1)
+        st.session_state["obs_precip"] = round(float(hist_record["precipitation_sum"]), 1)
+        st.session_state["obs_wind"] = round(float(hist_record["wind_speed_10m_max"]), 1)
+        st.session_state["obs_sun"] = round(float(hist_record["sunshine_hours"]), 1)
+        st.session_state["loaded_hist_date"] = f"{selected_city} ({selected_date_str})"
+        st.sidebar.success(f"Loaded actual archive weather for **{selected_city}** on **{selected_date_str}**.")
+    else:
+        st.sidebar.warning(
+            f"No historical archive record for **{selected_city}** on **{selected_date_str}** "
+            "(dataset covers `2020-01-01` to `2026-10-31`). Using custom/default inputs."
+        )
 
 st.sidebar.markdown("### 🌡️ Today's Weather Observations")
 
 temp_max = st.sidebar.slider(
     "Today's Max Temp (°C)",
-    min_value=12.0,
-    max_value=40.0,
-    value=float(defaults["max"]),
+    min_value=10.0,
+    max_value=42.0,
     step=0.1,
+    key="obs_temp_max",
 )
 temp_min = st.sidebar.slider(
     "Today's Min Temp (°C)",
-    min_value=5.0,
-    max_value=32.0,
-    value=float(min(defaults["min"], temp_max - 0.5)),
+    min_value=4.0,
+    max_value=35.0,
     step=0.1,
+    key="obs_temp_min",
 )
-default_mean = round(min(max(defaults["mean"], temp_min), temp_max), 1)
 temp_mean = st.sidebar.slider(
     "Today's Mean Temp (°C)",
-    min_value=float(temp_min),
-    max_value=float(temp_max),
-    value=float(default_mean),
+    min_value=5.0,
+    max_value=40.0,
     step=0.1,
+    key="obs_temp_mean",
 )
 
 precip_sum = st.sidebar.slider(
     "Daily Rainfall / Precipitation (mm)",
     min_value=0.0,
-    max_value=200.0,
-    value=float(defaults["rain"]),
+    max_value=250.0,
     step=0.5,
+    key="obs_precip",
 )
 wind_speed_max = st.sidebar.slider(
     "Max Wind Speed at 10m (km/h)",
-    min_value=2.0,
-    max_value=70.0,
-    value=float(defaults["wind"]),
+    min_value=0.0,
+    max_value=90.0,
     step=0.5,
+    key="obs_wind",
 )
 sunshine_hours = st.sidebar.slider(
     "Sunshine Hours (hrs/day)",
     min_value=0.0,
-    max_value=12.5,
-    value=float(defaults["sun"]),
+    max_value=13.0,
     step=0.1,
+    key="obs_sun",
 )
 
 st.sidebar.markdown("---")
@@ -428,7 +512,7 @@ st.sidebar.info(
 X_user = build_feature_row(
     city=selected_city,
     month=selected_month,
-    day_of_year=default_doy,
+    day_of_year=exact_doy,
     temp_max=temp_max,
     temp_min=temp_min,
     temp_mean=temp_mean,
@@ -441,6 +525,10 @@ X_user = build_feature_row(
 all_preds = compute_all_predictions(X_user, selected_city, temp_mean)
 active_pred = all_preds[selected_model]
 temp_delta = active_pred - temp_mean
+
+actual_next_temp = None
+if hist_record is not None and pd.notna(hist_record.get("actual_next_temp")):
+    actual_next_temp = float(hist_record["actual_next_temp"])
 
 # -----------------------------------------------------------------------------
 # Header & Top KPI Row
@@ -455,15 +543,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns([1.15, 1.45, 1.25, 1.15])
+kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns([1.15, 1.35, 1.35, 1.15])
 
 with kpi_col1:
     st.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-label">Selected City</div>
+            <div class="kpi-label">Selected City & Season</div>
             <div class="kpi-value">{selected_city}</div>
-            <div class="kpi-sub">{city_info['zone']}</div>
+            <div class="kpi-sub">{monsoon_season}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -483,12 +571,20 @@ with kpi_col2:
 
 with kpi_col3:
     delta_sign = "+" if temp_delta >= 0 else ""
+    if actual_next_temp is not None:
+        pred_err = active_pred - actual_next_temp
+        sub_line = (
+            f"Actual ({target_date_str}): {actual_next_temp:.2f} °C | "
+            f"Error: {pred_err:+.2f} °C (|e|={abs(pred_err):.2f} °C)"
+        )
+    else:
+        sub_line = f"{delta_sign}{temp_delta:.2f} °C vs. Today ({selected_date_str}: {temp_mean:.1f} °C)"
     st.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-label">Predicted Tomorrow's Mean Temp</div>
+            <div class="kpi-label">Forecast Target: {target_date_str} (Next Day)</div>
             <div class="kpi-value">{active_pred:.2f} °C</div>
-            <div class="kpi-sub">{delta_sign}{temp_delta:.2f} °C vs. Today's Mean ({temp_mean:.1f} °C)</div>
+            <div class="kpi-sub">{sub_line}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -500,12 +596,21 @@ with kpi_col4:
     st.markdown(
         f"""
         <div class="kpi-card">
-            <div class="kpi-label">Multi-Model Consensus</div>
+            <div class="kpi-label">Multi-Model Consensus ({target_date_str})</div>
             <div class="kpi-value">{ensemble_mean:.2f} °C</div>
             <div class="kpi-sub">Spread (σ): ±{ensemble_spread:.2f} °C across 8 models</div>
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+if actual_next_temp is not None:
+    pred_error = active_pred - actual_next_temp
+    st.info(
+        f"📅 **Historical Verification ({selected_city} — Observation Date `{selected_date_str}` → Target Date `{target_date_str}`):** "
+        f"Predicted Next-Day Mean Temp = **`{active_pred:.2f} °C`** | "
+        f"Actual Next-Day Mean Temp = **`{actual_next_temp:.2f} °C`** | "
+        f"Forecast Error = **`{pred_error:+.2f} °C`** (Absolute Error: `{abs(pred_error):.2f} °C`)."
     )
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -577,10 +682,10 @@ with tab1:
         st.plotly_chart(fig_rmse, use_container_width=True)
 
     st.markdown("---")
-    st.subheader(f"⚡ Live Side-by-Side Model Predictions for {selected_city}")
+    st.subheader(f"⚡ Live Side-by-Side Model Predictions for {selected_city} (Target Date: {target_date_str})")
     st.caption(
-        f"Comparing all 8 trained model predictions dynamically for your current sidebar inputs "
-        f"(Today's Mean: {temp_mean:.1f} °C, Range: {temp_max - temp_min:.1f} °C, Rainfall: {precip_sum:.1f} mm, Sunshine: {sunshine_hours:.1f} hrs)."
+        f"Comparing all 8 trained model predictions dynamically for `{selected_date_str}` (Month `{selected_month}`, Day of Year `{exact_doy}`) "
+        f"| Today's Mean: {temp_mean:.1f} °C, Range: {temp_max - temp_min:.1f} °C, Rainfall: {precip_sum:.1f} mm, Sunshine: {sunshine_hours:.1f} hrs."
     )
 
     live_rows = []
@@ -588,28 +693,33 @@ with tab1:
     for m_name in ALL_MODEL_NAMES:
         pred_val = all_preds[m_name]
         m_info = metrics_lookup.get(m_name, {})
-        live_rows.append(
-            {
-                "Status": "👉 Active" if m_name == selected_model else "Benchmark",
-                "Model Name": m_name,
-                "Ensemble Family": get_model_family(m_name),
-                "Predicted Next-Day Temp (°C)": round(pred_val, 3),
-                "Change vs. Today (°C)": round(pred_val - temp_mean, 3),
-                "Test RMSE (°C)": round(float(m_info.get("RMSE (°C)", np.nan)), 4),
-                "Test R²": round(float(m_info.get("R2 Score", np.nan)), 4),
-            }
-        )
+        row_item = {
+            "Status": "👉 Active" if m_name == selected_model else "Benchmark",
+            "Model Name": m_name,
+            "Ensemble Family": get_model_family(m_name),
+            "Predicted Next-Day Temp (°C)": round(pred_val, 3),
+            "Change vs. Today (°C)": round(pred_val - temp_mean, 3),
+        }
+        if actual_next_temp is not None:
+            row_item["Actual Next-Day Temp (°C)"] = round(actual_next_temp, 3)
+            row_item["Forecast Error (°C)"] = round(pred_val - actual_next_temp, 3)
+        row_item["Test RMSE (°C)"] = round(float(m_info.get("RMSE (°C)", np.nan)), 4)
+        row_item["Test R²"] = round(float(m_info.get("R2 Score", np.nan)), 4)
+        live_rows.append(row_item)
 
     live_df = pd.DataFrame(live_rows)
+    fmt_dict = {
+        "Predicted Next-Day Temp (°C)": "{:.2f} °C",
+        "Change vs. Today (°C)": "{:+.2f} °C",
+        "Test RMSE (°C)": "{:.4f}",
+        "Test R²": "{:.4f}",
+    }
+    if actual_next_temp is not None:
+        fmt_dict["Actual Next-Day Temp (°C)"] = "{:.2f} °C"
+        fmt_dict["Forecast Error (°C)"] = "{:+.2f} °C"
+
     st.dataframe(
-        live_df.style.format(
-            {
-                "Predicted Next-Day Temp (°C)": "{:.2f} °C",
-                "Change vs. Today (°C)": "{:+.2f} °C",
-                "Test RMSE (°C)": "{:.4f}",
-                "Test R²": "{:.4f}",
-            }
-        ),
+        live_df.style.format(fmt_dict),
         use_container_width=True,
         hide_index=True,
     )
