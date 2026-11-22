@@ -1,0 +1,36 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# CatBoost training logs
+catboost_info/
+
+# Environment variables and secrets
+.env
+.env.local
+.streamlit/secrets.toml
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary / local archive assets
+dashboard_assets/
+dashboard_assets.zip
+srilanka-weather-dashboard/
+
+# Note: data/*.csv, models/*.joblib, and artifacts/*.csv are intentionally tracked
+# for Streamlit Community Cloud deployment.
