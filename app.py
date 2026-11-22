@@ -513,11 +513,12 @@ st.markdown("<br>", unsafe_allow_html=True)
 # -----------------------------------------------------------------------------
 # Main Analytical Tabs
 # -----------------------------------------------------------------------------
-tab1, tab2, tab3 = st.tabs(
+tab1, tab2, tab3, tab4 = st.tabs(
     [
         "📊 Tab 1: Model Comparison & Live Predictions",
         "🌿 Tab 2: Feature Importance & Domain Insights",
         "📈 Tab 3: Time-Series Forecast (Colombo Test Set)",
+        "📚 Research Insights",
     ]
 )
 
@@ -753,6 +754,60 @@ with tab3:
             rmse_val = float(np.sqrt(np.mean((filtered_fc["target_next_temp"] - filtered_fc[pred_col]) ** 2)))
             mae_val = float(np.mean(np.abs(filtered_fc["target_next_temp"] - filtered_fc[pred_col])))
             col_widget.metric(label, f"{rmse_val:.4f} °C", f"MAE: {mae_val:.4f} °C", delta_color="off")
+
+# =============================================================================
+# TAB 4: RESEARCH INSIGHTS (TABULAR VS. IMAGE / TEXT DATA)
+# =============================================================================
+with tab4:
+    st.subheader("📚 Research Note: Ensemble Strengths & Limitations (Tabular vs. Image/Text Data)")
+    st.caption(
+        "Comparative analysis of why Tree-Based Ensembles dominate structured meteorological records while Deep Learning architectures excel on unstructured sensory and textual modalities."
+    )
+
+    res_col1, res_col2 = st.columns(2)
+
+    with res_col1:
+        st.success(
+            "### ✅ Tabular Data (Strength of Tree Ensembles)\n\n"
+            "- **Axis-Aligned Partitioning on Heterogeneous Features:** Tree-based ensembles (`RandomForest`, `XGBoost`, `LightGBM`, `CatBoost`) naturally split mixed numerical and categorical columns (continuous temperatures, skewed rainfall, cyclical monsoon months, and one-hot city indicators) without requiring feature scaling.\n"
+            "- **Sharp Non-Linear Regime Shifts:** Easily captures abrupt domain boundaries such as Nuwara Eliya's montane elevation lapse rate vs. lowland coastal stations.\n"
+            "- **Sample & Compute Efficiency:** Achieves state-of-the-art accuracy ($R^2 = 0.9860$, $\\text{RMSE} = 0.5477^\\circ\\text{C}$) on $\\sim 12,480$ rows in seconds on CPU, with transparent Gini/gain feature importance and built-in handling of missing values."
+        )
+
+    with res_col2:
+        st.warning(
+            "### ⚠️ Image & Text Data (Limitation of Tree Ensembles)\n\n"
+            "- **Lack of Spatial & Translational Invariance (Images):** Treating raw satellite or radar pixels as independent tabular columns loses 2D spatial locality, edge continuity, and multi-scale cloud morphology. **Convolutional Neural Networks (CNNs)** and **Vision Transformers (ViTs)** overcome this via shared spatial filters.\n"
+            "- **Loss of Sequential & Semantic Context (Text):** Tree splits on bag-of-words or TF-IDF vectors cannot model long-range token dependencies, grammar, or contextual semantics in weather bulletins. **RNNs, Transformers, and Large Language Models (LLMs)** excel here via self-attention and dense embeddings.\n"
+            "- **No End-to-End Representation Learning:** Decision trees cannot learn hierarchical latent embeddings from raw unstructured signals."
+        )
+
+    st.markdown("#### 🔬 Paradigm Comparison: Tree-Based Ensembles vs. Deep Learning Across Modalities")
+
+    comparison_df = pd.DataFrame(
+        [
+            {
+                "Data Modality": "Tabular Data (Structured Rows & Columns)",
+                "Tree Ensembles (RF, XGBoost, LightGBM, CatBoost)": "⭐ Superior (SOTA): Handles mixed data types, sharp non-linear thresholds, and unscaled features with low CPU cost & clear feature attribution.",
+                "Deep Learning (CNNs, RNNs, Transformers / LLMs)": "Moderate: Over-parameterized for small/medium tables; prone to overfitting on irregular decision boundaries and lacks native interpretability.",
+                "Best-Fit Weather Application": "Daily meteorological station records (temp, rainfall, wind, sunshine, city OHE) paired with ARIMA.",
+            },
+            {
+                "Data Modality": "Image Data (2D/3D Spatial Grids & Pixels)",
+                "Tree Ensembles (RF, XGBoost, LightGBM, CatBoost)": "Poor: Axis-aligned pixel splits ignore 2D spatial locality, rotation/translation invariance, and hierarchical textures.",
+                "Deep Learning (CNNs, RNNs, Transformers / LLMs)": "⭐ Superior (SOTA): Spatial convolutions and patch attention learn multi-scale cloud structures and cyclone morphology end-to-end.",
+                "Best-Fit Weather Application": "Indian Ocean geostationary satellite cloud imagery & Doppler weather radar reflectivity maps.",
+            },
+            {
+                "Data Modality": "Text Data (Sequential Tokens & Documents)",
+                "Tree Ensembles (RF, XGBoost, LightGBM, CatBoost)": "Poor: Relies on sparse bag-of-words / TF-IDF counts; loses word order, syntactic structure, and semantic context.",
+                "Deep Learning (CNNs, RNNs, Transformers / LLMs)": "⭐ Superior (SOTA): Self-attention mechanisms and dense embeddings capture long-range semantics and domain reasoning.",
+                "Best-Fit Weather Application": "Automated synthesis of Department of Meteorology advisories & extreme weather warning bulletins.",
+            },
+        ]
+    )
+
+    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 st.caption(
